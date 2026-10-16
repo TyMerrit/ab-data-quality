@@ -9,7 +9,10 @@ It is the companion code to the post *How to validate your randomization (and yo
 ## Quick start
 
 ```bash
-pip install -e ".[experiments,dev]"
+git clone https://github.com/tymerrit/ab-data-quality.git
+cd ab-data-quality
+pip install -r requirements.txt   # numpy, pandas, scipy, matplotlib, pytest
+pip install -e . 
 ```
 
 ```python
