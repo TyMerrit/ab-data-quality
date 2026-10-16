@@ -11,9 +11,11 @@ It is the companion code to the post *How to validate your randomization (and yo
 ```bash
 git clone https://github.com/tymerrit/ab-data-quality.git
 cd ab-data-quality
-pip install -r requirements.txt   # numpy, pandas, scipy, matplotlib, pytest
-pip install -e . 
+pip install -r requirements.txt   # numpy, pandas, scipy, matplotlib, jupyter, pytest
+pip install -e .                  # makes `import abdq` work from anywhere
 ```
+
+A full walkthrough, from one experiment to the simulations, is in [`walkthrough.ipynb`](walkthrough.ipynb).
 
 ```python
 from abdq import validate_experiment
@@ -69,70 +71,119 @@ Two design rules:
 - **Confirmatory vs diagnostic.** Only confirmatory checks change the status. Segment-level SRM is diagnostic: it localizes a problem you already know about. With 50 segments, a few will cross any threshold by chance, and letting each of them block a result would be automated p-hacking in reverse.
 - **Preliminary vs untrustworthy.** "The data isn't complete yet" and "the data will never be complete" call for opposite responses: wait, or block. Without an independent source of truth, permanent loss in one variant is indistinguishable from a treatment effect, which is why the loss check needs `reference_counts`.
 
-## What the simulations show
+## Using it on your own experiments
 
-### (a) Selective exposure loss: SRM is a race you can lose
+The order matters: each step assumes the ones before it passed. Run them like this.
 
-`experiments/sim_exposure_loss.py`. In treatment, 1% of exposures are never logged and the analysis runs on logged units. There is no true effect.
+### Once, and after every change to assignment or analysis code: validate the platform
 
-![exposure loss race](figures/exposure_loss_race.png)
+Per-experiment checks can't catch a broken hashing function or a miscalibrated analysis pipeline, so validate those first.
 
-With `m` units per arm, the SRM z-score is about `L·sqrt(m/2)` and the bias z-score of the A/B test is about `d·L·sqrt(m/2)`, where `d` is how far the lost units sit from the average, in standard deviations. Both grow like `sqrt(m)`, so **sample size doesn't decide who notices first; `d` does.** Once `|d| > 1.96 / 3.29 ≈ 0.6`, a fake effect is more likely than not before the SRM check is more likely than not to fire. If the loss hits the top 2% of spenders (`d ≈ 4.8`), the test shows a significant fake effect in 96% of runs at 10k users per arm, while SRM catches it in 1%.
+```python
+from abdq.platform import (
+    aa_replay, check_hash_determinism, check_hash_independence, check_hash_uniformity,
+)
 
-The practical answer is to check the layers directly (exposure rate by variant, within critical segments), and where possible analyze by assignment rather than by logged exposure.
+split = {"control": 0.5, "treatment": 0.5}
 
-### (b) Your SRM check is peeking too
+def my_assign(unit_ids, salt):
+    """Wrap your production assignment function: ids + experiment salt -> variant names."""
+    ...
 
-`experiments/sim_srm_monitoring.py`. 14-day test, 10,000 users per day, 20,000 simulated tests per rule.
+for check in (check_hash_uniformity(my_assign, split),          # 0.1a buckets match the split
+              check_hash_determinism(my_assign),                # 0.1b same id -> same variant, every time
+              check_hash_independence(my_assign, split)):       # 0.1c two experiments don't correlate
+    print(check.status.value, check.message)
 
-![srm monitoring](figures/srm_monitoring.png)
+def my_analysis(events, is_treatment):
+    """Your real readout code. events: historical rows with a unit_id column;
+    is_treatment: boolean Series indexed by unit_id. Returns the p-value."""
+    ...
 
-| Rule | False alarms (true 50/50) | Detects 49.5/50.5 | Median day of alarm |
-|---|---|---|---|
-| chi-square p < 0.05, daily | 21.8% | 98% | 3 |
-| chi-square p < 0.001, daily | 0.7% | 73% | 8 |
-| chi-square p < 0.001, hourly | 2.0% | 77% | 7 |
-| anytime-valid mixture LR, α = 0.001, hourly | 0.0% | 41% | 10 |
-| anytime-valid mixture LR, calibrated α, hourly | 0.6% | 74% | 7.6 |
-| chi-square p < 0.001, end only | 0.1% | 67% | 14 |
+result = aa_replay(historical_events, my_analysis, n_replays=500)    # 0.2 calibration
+print(result.check.message)   # false positive rate must sit in the band around alpha
+```
 
-The common default (α = 0.05, checked every morning) raises a false SRM alarm on one test in five. A strict threshold fixes most of it: 14 daily looks at p < 0.001 cannot exceed 1.4% false alarms by a union bound, and in practice give 0.7%.
+If any of these fail, stop: no per-experiment check downstream can be trusted until they pass.
 
-At the same nominal α = 0.001 the anytime-valid test looks weak, but that comparison is unfair: Ville's inequality is conservative, and the realized false alarm rate is around 0.01%. Calibrating its threshold by simulation to the same realized false alarm rate as daily chi-square (nominal α ≈ 0.019 at 10k users/day) closes the gap: equal false alarms, equal power, slightly earlier detection because it can look hourly. The catch is that the calibrated threshold is only guaranteed for the traffic, horizon and look schedule it was calibrated on. Use the uncalibrated version when you monitor continuously and need a guarantee that holds whenever you look; otherwise, a strict fixed threshold checked daily is simpler and just as good.
+### For every experiment
 
-### (c) The platform: one A/A test validates nothing
+**1. Pull the three tables.** One row per assignment, one per exposure, one per outcome event. `unit_id` must be the randomization unit in all three. Keep timestamps in one timezone. Add segment columns (`platform`, `country`, `app_version`) to `assignments`: they power the critical-segment and diagnostic checks.
 
-`experiments/platform_checks.py`. 500 A/A replays on the same historical session data:
+**2. Pull the optional inputs if you have them.** Each one unlocks a check that nothing else can replace:
 
-![aa replay](figures/aa_replay_pvalues.png)
+- `covariates`: pre-experiment metrics per unit. Catches a split that is balanced in counts but not in composition, which SRM can't see.
+- `identities`: `unit_id` to `device_id`. Catches one variant fragmenting users into more ids.
+- `reference_counts`: outcome counts per variant from an independent system (orders DB, billing). Without it, permanent loss of outcome events is indistinguishable from a treatment effect.
 
-Aggregating to the randomization unit gives a 5% false positive rate. Treating sessions as independent gives 42%. A single live A/A test would most likely have passed either one. The hashing checks catch two classic bugs that each slip past the other checks: modulo bias (58.5/41.5 split) and a shared salt (two "independent" experiments assign identically).
+**3. Describe the design.**
 
-### (d) Validating the validator
+```python
+import pandas as pd
+from abdq import ExperimentConfig, ExperimentData, Thresholds, validate_experiment
 
-`experiments/validate_the_validator.py`. The pipeline is a decision procedure too, so it has error rates. 200 seeds per scenario, 40,000 units each:
+config = ExperimentConfig(
+    expected_split={"control": 0.5, "treatment": 0.5},
+    control="control",
+    analysis_start=pd.Timestamp("2026-09-01"),
+    analysis_end=pd.Timestamp("2026-09-15"),
+    as_of=pd.Timestamp("2026-09-18"),               # when the data was pulled
+    max_expected_lag=pd.Timedelta(days=2),          # from your pipeline's history
+    critical_segments=("platform",),                # known logging risks -> confirmatory
+    srm_method="fixed",                             # "anytime" if you monitor continuously
+    thresholds=Thresholds(),                        # defaults are strict on purpose
+)
 
-| Scenario | Expected | Share with expected status |
-|---|---|---|
-| healthy | trustworthy | 99.0% |
-| 51/49 split instead of 50/50 | untrustworthy | 79.0% |
-| 1% of units in both variants | untrustworthy | 100% |
-| 5% of treatment iOS exposures lost | untrustworthy | 86.5% |
-| slow pipeline, pulled 6h after window | preliminary | 99.0% |
-| 5% of treatment outcomes lost for good | untrustworthy | 100% |
-| 10% of treatment users get an extra device id | untrustworthy | 100% |
-| heavy users leak into treatment, counts 50/50 | untrustworthy | 100% |
+data = ExperimentData(assignments, exposures, outcomes,
+                      covariates=covariates, identities=identities,
+                      reference_counts={"control": 51_204, "treatment": 50_987})
+```
 
-The false block rate on healthy experiments is about 1%, the price of running ~15 confirmatory tests per experiment at strict thresholds. Misses are power limits at this sample size: a 1-point SRM at 40k units has z ≈ 4.
+**4. Run and act on the status.**
+
+```python
+report = validate_experiment(data, config)
+
+report.status        # trustworthy / preliminary / untrustworthy
+report.action        # publish / wait for the data to mature / block until the root cause is found
+report.reasons       # the confirmatory checks behind the status, e.g. ['3.4 exposure_rate_by_variant']
+report.to_markdown() # full report for the experiment page
+report.to_json()     # for dashboards and alerting
+```
+
+**5. If the status is `untrustworthy`, investigate in pipeline order.** The lowest failing step is usually the cause, and later failures are its symptoms: an assignment bug (step 2) also skews exposures (step 3) and outcomes (step 4). Then read the step 7 diagnostics to localize it: which platform, country or app version carries the imbalance. Fix the root cause. Don't trim the bigger arm or reweight your way out of an SRM: that hides the evidence and keeps the bias.
+
+**6. When to run it.** During the test, daily, as monitoring: SRM, crossover and exposure checks are meaningful from day one, and `preliminary` from step 4 is expected while data is still arriving. Before the readout, run once more with `as_of` at least `max_expected_lag` after `analysis_end`. Only a `trustworthy` result at that point should be read.
+
+### Running a single step
+
+Each step is a plain function, so you can wire them into your own orchestration (Airflow, dbt post-hooks, a notebook):
+
+```python
+from abdq.checks import assignment, balance, contracts, diagnostics, exposure, identity, outcomes
+from abdq.decision import decide
+
+checks, clean = contracts.run(data, config)                                   # step 1, returns cleaned tables
+step2, units = assignment.run(clean.assignments, config)                      # step 2, returns one row per unit
+step3, units_exposed = exposure.run(units, clean.exposures, config)           # step 3
+step4 = outcomes.run(units, clean.outcomes, config, clean.reference_counts)  # step 4
+step5 = identity.run(units, clean.identities, config)                         # step 5
+step6 = balance.run(units, clean.covariates, config)                          # step 6
+step7 = diagnostics.run(units_exposed, config)                                # step 7, never blocking
+status, reasons = decide(checks + step2 + step3 + step4 + step5 + step6 + step7)  # step 8
+```
+
+Steps 3-7 need the `units` table from step 2, and every step expects the cleaned tables from step 1.
+
+### Tuning thresholds
+
+The defaults (`srm_alpha = structural_alpha = 0.001`, share thresholds of 0.1%) give about a 1% false block rate on healthy synthetic experiments (notebook section 6). Before changing them, rerun that section on your own historical experiments: lowering a threshold to catch more defects also blocks more healthy tests, and with ~15 confirmatory checks per experiment the false blocks add up.
 
 ## Reproduce
 
+The simulations behind the post (selective exposure loss, SRM monitoring, A/A replay, the validator's own error rates) live in the notebook. Open [`walkthrough.ipynb`](walkthrough.ipynb) and run all cells (about 8 minutes, most of it in section 6). It writes figures to `figures/` and tables and per-scenario reports to `results/`. Tests:
+
 ```bash
-python experiments/run_scenarios.py          # one report per scenario -> results/reports/
-python experiments/sim_exposure_loss.py      # ~30 s
-python experiments/sim_srm_monitoring.py     # ~1 min
-python experiments/platform_checks.py        # ~10 s
-python experiments/validate_the_validator.py # ~6 min
 pytest
 ```
 

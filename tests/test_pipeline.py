@@ -10,7 +10,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "experiments"))
 
 from abdq import CheckStatus, ExperimentStatus, SchemaError, validate_experiment  # noqa: E402
 from abdq import simulate as sim  # noqa: E402
@@ -24,14 +23,13 @@ from abdq.platform import (  # noqa: E402
     unit_level_ttest,
 )
 from abdq.stats import log_mixture_srm, srm_chi2  # noqa: E402
-from run_scenarios import scenarios  # noqa: E402
 
 SPLIT = {"control": 0.5, "treatment": 0.5}
 
 
 @pytest.mark.parametrize("seed", [0, 1])
 def test_scenarios_get_expected_status(seed):
-    for name, _defect, expected, data, config in scenarios(seed=seed):
+    for name, _defect, expected, data, config in sim.defect_scenarios(seed=seed):
         report = validate_experiment(data, config)
         assert report.status.value == expected, (name, report.reasons)
 

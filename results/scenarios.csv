@@ -1,9 +1,0 @@
-scenario,injected_defect,expected_status,status,blocking_checks,srm_assignment_p,correct
-healthy,none,trustworthy,trustworthy,,0.6030635750939324,True
-srm,assignment split 51/49 instead of 50/50,untrustworthy,untrustworthy,2.1 srm_assignment; 3.5 srm_exposed,7.821959720561411e-06,True
-crossover,1% of units also assigned to the other variant,untrustworthy,untrustworthy,2.2 crossover_units,0.6030635750939324,True
-exposure_loss_ios,5% of treatment exposures on iOS not logged,untrustworthy,untrustworthy,3.4 exposure_rate_by_variant; 3.6 critical_segment[platform],0.6030635750939324,True
-late_outcomes,"slow pipeline, data pulled 6h after the window",preliminary,preliminary,4.2 maturity; 4.4 completeness_vs_reference,0.6030635750939324,True
-outcome_loss,5% of treatment outcome events lost for good,untrustworthy,untrustworthy,4.4 completeness_vs_reference,0.6030635750939324,True
-identity_split,10% of treatment users get an extra device id,untrustworthy,untrustworthy,5.1 ids_per_unit,0.6030635750939324,True
-covariate_imbalance,"heavy users leak into treatment, counts stay 50/50",untrustworthy,untrustworthy,6.1 covariate_balance,0.5961119307897529,True

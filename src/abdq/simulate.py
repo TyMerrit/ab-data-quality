@@ -186,3 +186,26 @@ def inject_identity_split(data: ExperimentData, rate: float, variant: str = "tre
 def late_data_spec(spec: SimSpec = SimSpec()) -> SimSpec:
     """Same experiment, but pulled 6 hours after the window closed with slow processing."""
     return replace(spec, lag_mean_hours=10.0, as_of_delay=pd.Timedelta(hours=6))
+
+
+def defect_scenarios(seed: int = 0):
+    """One healthy experiment and one experiment per defect, with the status the
+    pipeline is expected to return. Yields (name, defect, expected, data, config)."""
+    spec = SimSpec(seed=seed)
+    data, config = generate_experiment(spec)
+    yield "healthy", "none", "trustworthy", data, config
+    d, c = generate_experiment(replace(spec, realized_split={"control": 0.51, "treatment": 0.49}))
+    yield "srm", "assignment split 51/49 instead of 50/50", "untrustworthy", d, c
+    yield ("crossover", "1% of units also assigned to the other variant", "untrustworthy",
+           inject_crossover(data, 0.01), config)
+    yield ("exposure_loss_ios", "5% of treatment exposures on iOS not logged", "untrustworthy",
+           inject_exposure_loss(data, 0.05), config)
+    d, c = generate_experiment(late_data_spec(spec))
+    yield "late_outcomes", "slow pipeline, data pulled 6h after the window", "preliminary", d, c
+    yield ("outcome_loss", "5% of treatment outcome events lost for good", "untrustworthy",
+           inject_outcome_loss(data, 0.05), config)
+    yield ("identity_split", "10% of treatment users get an extra device id", "untrustworthy",
+           inject_identity_split(data, 0.10), config)
+    d, c = generate_experiment(replace(spec, assignment_bias=0.10))
+    yield ("covariate_imbalance", "heavy users leak into treatment, counts stay 50/50", "untrustworthy",
+           d, c)
