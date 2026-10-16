@@ -1,0 +1,9 @@
+scenario,expected,share_with_expected_status
+healthy,trustworthy,0.99
+srm,untrustworthy,0.79
+crossover,untrustworthy,1.0
+exposure_loss_ios,untrustworthy,0.865
+late_outcomes,preliminary,0.99
+outcome_loss,untrustworthy,1.0
+identity_split,untrustworthy,1.0
+covariate_imbalance,untrustworthy,1.0

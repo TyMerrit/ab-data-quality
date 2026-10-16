@@ -1,0 +1,10 @@
+assignment,check,status,message
+sha256 reference,hash_uniformity,pass,"300,000 synthetic ids -> shares {'control': 0.50069, 'treatment': 0.49931}; p = 4.52e-01."
+sha256 reference,hash_determinism,pass,"Ids assigned differently on a second, shuffled pass: 0."
+sha256 reference,hash_independence,pass,Cross-tab of variants in two experiments: p = 9.82e-01.
+modulo bias bug,hash_uniformity,fail,"300,000 synthetic ids -> shares {'control': 0.5847, 'treatment': 0.4153}; p = 0.00e+00."
+modulo bias bug,hash_determinism,pass,"Ids assigned differently on a second, shuffled pass: 0."
+modulo bias bug,hash_independence,pass,Cross-tab of variants in two experiments: p = 7.94e-01.
+global salt bug,hash_uniformity,pass,"300,000 synthetic ids -> shares {'control': 0.49993, 'treatment': 0.50007}; p = 9.39e-01."
+global salt bug,hash_determinism,pass,"Ids assigned differently on a second, shuffled pass: 0."
+global salt bug,hash_independence,fail,Cross-tab of variants in two experiments: p = 0.00e+00. Assignments are correlated: the experiments are not independent (shared or missing salt?).

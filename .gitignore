@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+results/validate_the_validator_runs.csv
